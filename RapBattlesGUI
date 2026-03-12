@@ -1,370 +1,298 @@
---[[
-    AI RAP GENERATOR - Rap Battles (8067158534)
-    - Describe the opponent's avatar
-    - Claude AI writes the rap lines
-    - Auto-sends them in game one by one
-]]
-
+-- FlowForge v2 | AI Rap Battle Generator | GPT-4o
 if not game:IsLoaded() then game.Loaded:Wait() end
 task.wait(1)
 
-local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local LP = Players.LocalPlayer
-local PGui = LP:WaitForChild("PlayerGui")
+local Players,TweenService,UserInputService,HttpService =
+    game:GetService("Players"),game:GetService("TweenService"),
+    game:GetService("UserInputService"),game:GetService("HttpService")
+local LP,PGui = Players.LocalPlayer, Players.LocalPlayer:WaitForChild("PlayerGui")
+if PGui:FindFirstChild("FlowForgeGUI") then PGui.FlowForgeGUI:Destroy() end
 
--- Clean up old
-if PGui:FindFirstChild("AIRapGUI") then PGui.AIRapGUI:Destroy() end
+local C = {
+    BG0=Color3.fromRGB(7,7,11),BG1=Color3.fromRGB(13,12,20),
+    BG2=Color3.fromRGB(20,18,32),BG3=Color3.fromRGB(28,25,45),
+    BORDER=Color3.fromRGB(40,35,62),BORDER2=Color3.fromRGB(60,52,95),
+    ACC1=Color3.fromRGB(138,72,255),ACC2=Color3.fromRGB(80,170,255),
+    ACC3=Color3.fromRGB(255,80,160),
+    TXT0=Color3.fromRGB(240,235,255),TXT1=Color3.fromRGB(165,155,200),
+    TXT2=Color3.fromRGB(90,80,130),
+    GREEN=Color3.fromRGB(60,230,140),RED=Color3.fromRGB(255,75,75),
+    YELLOW=Color3.fromRGB(255,210,60),
+}
 
--- ─────────────────────────────────────
---  SAY FUNCTION (both confirmed remotes)
--- ─────────────────────────────────────
+local function Tw(o,t,p) TweenService:Create(o,TweenInfo.new(t,Enum.EasingStyle.Quint),p):Play() end
+local function Corner(p,r) local c=Instance.new("UICorner",p);c.CornerRadius=UDim.new(0,r or 8) end
+local function Stroke(p,col,th) local s=Instance.new("UIStroke",p);s.Color=col;s.Thickness=th or 1;return s end
+local function Grad(p,c0,c1,a) local g=Instance.new("UIGradient",p);g.Color=ColorSequence.new(c0,c1);g.Rotation=a or 90 end
+local function Lbl(parent,props)
+    local l=Instance.new("TextLabel");l.BackgroundTransparency=1;l.TextScaled=true
+    for k,v in pairs(props) do l[k]=v end;l.Parent=parent;return l
+end
+
 local function Say(msg)
     pcall(function() game.Workspace.RapperChatting:FireServer(msg) end)
-    pcall(function()
-        game.ReplicatedStorage.DefaultChatSystemChatEvents
-            .SayMessageRequest:FireServer(msg, "All")
-    end)
+    pcall(function() game.ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg,"All") end)
 end
 
--- ─────────────────────────────────────
---  AI RAP GENERATOR via Anthropic API
--- ─────────────────────────────────────
-local HttpService = game:GetService("HttpService")
-
-local function GenerateRap(description, numLines, callback)
-    -- Uses syn.request / http.request (executor HTTP)
-    local requestFunc = syn and syn.request
-        or (http and http.request)
-        or (request)
-        or nil
-
-    if not requestFunc then
-        callback(nil, "Your executor doesn't support HTTP requests (syn.request). Try Synapse X, KRNL or Fluxus.")
-        return
-    end
-
-    local prompt = string.format(
-        "You are a savage Roblox rap battle roaster. " ..
-        "Write exactly %d short rap lines roasting this Roblox avatar: %s\n\n" ..
-        "Rules:\n" ..
-        "- Each line on its own line\n" ..
-        "- Keep each line under 100 characters\n" ..
-        "- Make it funny and roast-focused on the description\n" ..
-        "- No numbering, no bullet points, just the lines\n" ..
-        "- Use Roblox slang and references\n" ..
-        "- Rhyme where possible\n" ..
-        "Output ONLY the %d rap lines, nothing else.",
-        numLines, description, numLines
-    )
-
-    local body = HttpService:JSONEncode({
-        model = "claude-sonnet-4-20250514",
-        max_tokens = 600,
-        messages = {
-            { role = "user", content = prompt }
-        }
-    })
-
+local function GenerateRap(key,desc,n,cb)
+    local req=(syn and syn.request)or(http and http.request)or request or nil
+    if not req then cb(nil,"Executor HTTP not supported");return end
+    if not key or #key<20 then cb(nil,"Invalid API key");return end
+    local prompt=string.format(
+        "You are the most savage Roblox rap battle roaster. Write exactly %d rap lines roasting: %s\n"..
+        "Rules: each line on its own line, under 100 chars, funny roast, no numbers/bullets, "..
+        "Roblox slang, rhyme where possible. Output ONLY the %d lines.",n,desc,n)
+    local body=HttpService:JSONEncode({model="gpt-4o",max_tokens=600,messages={
+        {role="system",content="You are a savage Roblox rap battle roaster."},
+        {role="user",content=prompt}}})
     task.spawn(function()
-        local ok, res = pcall(function()
-            return requestFunc({
-                Url = "https://api.anthropic.com/v1/messages",
-                Method = "POST",
-                Headers = {
-                    ["Content-Type"] = "application/json",
-                    ["anthropic-version"] = "2023-06-01",
-                },
-                Body = body
-            })
+        local ok,res=pcall(function()
+            return req({Url="https://api.openai.com/v1/chat/completions",Method="POST",
+                Headers={["Content-Type"]="application/json",["Authorization"]="Bearer "..key},Body=body})
         end)
-
-        if not ok then
-            callback(nil, "Request failed: " .. tostring(res))
-            return
-        end
-
-        local decoded = pcall(function() res = HttpService:JSONDecode(res.Body) end)
-        if res and res.content and res.content[1] and res.content[1].text then
-            local text = res.content[1].text
-            -- Split into lines
-            local lines = {}
-            for line in text:gmatch("[^\n]+") do
-                line = line:match("^%s*(.-)%s*$") -- trim
-                if #line > 2 then
-                    table.insert(lines, line)
-                end
+        if not ok then cb(nil,"Request failed: "..tostring(res));return end
+        pcall(function() res=HttpService:JSONDecode(res.Body) end)
+        if res and res.error then cb(nil,"OpenAI: "..(res.error.message or "error"));return end
+        if res and res.choices and res.choices[1] and res.choices[1].message then
+            local lines={}
+            for line in res.choices[1].message.content:gmatch("[^\n]+") do
+                line=line:match("^%s*(.-)%s*$");if #line>2 then table.insert(lines,line) end
             end
-            callback(lines, nil)
-        else
-            callback(nil, "Bad API response. Check executor HTTP support.")
-        end
+            cb(lines,nil)
+        else cb(nil,"Bad API response") end
     end)
 end
 
--- ─────────────────────────────────────
---  GUI
--- ─────────────────────────────────────
-local SGui = Instance.new("ScreenGui")
-SGui.Name = "AIRapGUI"
-SGui.ResetOnSpawn = false
-SGui.DisplayOrder = 999
-SGui.Parent = PGui
+-- GUI
+local SGui=Instance.new("ScreenGui");SGui.Name="FlowForgeGUI"
+SGui.ResetOnSpawn=false;SGui.DisplayOrder=999;SGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling;SGui.Parent=PGui
 
--- Main window
-local Win = Instance.new("Frame")
-Win.Size = UDim2.new(0, 380, 0, 420)
-Win.Position = UDim2.new(0.5, -190, 0.5, -210)
-Win.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
-Win.BorderSizePixel = 0
-Win.Parent = SGui
-Instance.new("UICorner", Win).CornerRadius = UDim.new(0, 10)
-local ws = Instance.new("UIStroke", Win)
-ws.Color = Color3.fromRGB(220, 40, 40); ws.Thickness = 1.5
+local WIN_W,WIN_H=440,540
+local Win=Instance.new("Frame");Win.Size=UDim2.new(0,WIN_W,0,WIN_H)
+Win.Position=UDim2.new(0.5,-WIN_W/2,0.5,-WIN_H/2);Win.BackgroundColor3=C.BG1
+Win.BorderSizePixel=0;Win.ZIndex=10;Win.ClipsDescendants=true;Win.Parent=SGui
+Corner(Win,16);Stroke(Win,C.BORDER2,1)
 
--- Title bar
-local TBar = Instance.new("Frame")
-TBar.Size = UDim2.new(1, 0, 0, 44)
-TBar.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-TBar.BorderSizePixel = 0
-TBar.Parent = Win
-Instance.new("UICorner", TBar).CornerRadius = UDim.new(0, 10)
-Instance.new("Frame", TBar).Size = UDim2.new(1,0,0.5,0) -- corner fix
-local tbfix = TBar:FindFirstChildOfClass("Frame")
-tbfix.Position = UDim2.new(0,0,0.5,0)
-tbfix.BackgroundColor3 = Color3.fromRGB(18,18,24)
-tbfix.BorderSizePixel = 0
+local TopLine=Instance.new("Frame");TopLine.Size=UDim2.new(1,0,0,2)
+TopLine.BackgroundColor3=C.ACC1;TopLine.BorderSizePixel=0;TopLine.ZIndex=12;TopLine.Parent=Win
+Grad(TopLine,C.ACC3,C.ACC2,0)
 
-local TitleLbl = Instance.new("TextLabel")
-TitleLbl.Text = "🎤  AI RAP GENERATOR"
-TitleLbl.Size = UDim2.new(1, -50, 1, 0)
-TitleLbl.Position = UDim2.new(0, 14, 0, 0)
-TitleLbl.BackgroundTransparency = 1
-TitleLbl.TextColor3 = Color3.fromRGB(240, 240, 245)
-TitleLbl.Font = Enum.Font.GothamBold
-TitleLbl.TextScaled = true
-TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-TitleLbl.Parent = TBar
+-- Header
+local Header=Instance.new("Frame");Header.Size=UDim2.new(1,0,0,60)
+Header.BackgroundColor3=C.BG0;Header.BorderSizePixel=0;Header.ZIndex=11;Header.Parent=Win
+Corner(Header,16)
+local hfix=Instance.new("Frame",Header);hfix.Size=UDim2.new(1,0,0,16)
+hfix.Position=UDim2.new(0,0,1,-16);hfix.BackgroundColor3=C.BG0;hfix.BorderSizePixel=0;hfix.ZIndex=11
 
-local XBtn = Instance.new("TextButton")
-XBtn.Text = "✕"
-XBtn.Size = UDim2.new(0, 30, 0, 26)
-XBtn.Position = UDim2.new(1, -36, 0.5, -13)
-XBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
-XBtn.TextColor3 = Color3.fromRGB(255,255,255)
-XBtn.Font = Enum.Font.GothamBold
-XBtn.TextScaled = true
-XBtn.BorderSizePixel = 0
-XBtn.Parent = TBar
-Instance.new("UICorner", XBtn).CornerRadius = UDim.new(0, 6)
-XBtn.MouseButton1Click:Connect(function() SGui:Destroy() end)
+local LogoBlock=Instance.new("Frame");LogoBlock.Size=UDim2.new(0,36,0,36)
+LogoBlock.Position=UDim2.new(0,12,0.5,-18);LogoBlock.BackgroundColor3=C.ACC1
+LogoBlock.BorderSizePixel=0;LogoBlock.ZIndex=12;LogoBlock.Parent=Header
+Corner(LogoBlock,9);Grad(LogoBlock,C.ACC3,C.ACC1,135)
+Lbl(LogoBlock,{Text="⚡",Size=UDim2.new(1,0,1,0),Font=Enum.Font.GothamBold,TextColor3=C.TXT0,ZIndex=13})
 
--- Content area
-local Content = Instance.new("Frame")
-Content.Size = UDim2.new(1, -20, 1, -54)
-Content.Position = UDim2.new(0, 10, 0, 50)
-Content.BackgroundTransparency = 1
-Content.Parent = Win
-local CList = Instance.new("UIListLayout", Content)
-CList.Padding = UDim.new(0, 8)
+Lbl(Header,{Text="FLOWFORGE",Size=UDim2.new(1,-110,0,26),Position=UDim2.new(0,56,0,8),
+    Font=Enum.Font.GothamBold,TextColor3=C.TXT0,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12})
+Lbl(Header,{Text="AI Rap Battle • GPT-4o",Size=UDim2.new(1,-110,0,16),Position=UDim2.new(0,56,0,36),
+    Font=Enum.Font.Gotham,TextColor3=C.TXT2,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12})
 
--- Label helper
-local function MakeLbl(parent, text, height, color)
-    local l = Instance.new("TextLabel")
-    l.Text = text
-    l.Size = UDim2.new(1, 0, 0, height)
-    l.BackgroundTransparency = 1
-    l.TextColor3 = color or Color3.fromRGB(160, 160, 175)
-    l.Font = Enum.Font.GothamBold
-    l.TextScaled = true
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = parent
-    return l
+local XBtn=Instance.new("TextButton");XBtn.Size=UDim2.new(0,30,0,30)
+XBtn.Position=UDim2.new(1,-42,0.5,-15);XBtn.BackgroundColor3=C.BG2;XBtn.TextColor3=C.TXT1
+XBtn.Text="✕";XBtn.Font=Enum.Font.GothamBold;XBtn.TextScaled=true
+XBtn.BorderSizePixel=0;XBtn.AutoButtonColor=false;XBtn.ZIndex=13;XBtn.Parent=Header
+Corner(XBtn,7);Stroke(XBtn,C.BORDER,1)
+XBtn.MouseButton1Click:Connect(function()
+    Tw(Win,0.2,{Size=UDim2.new(0,WIN_W,0,0),BackgroundTransparency=1})
+    task.delay(0.22,function() SGui:Destroy() end)
+end)
+
+-- Body
+local Body=Instance.new("ScrollingFrame");Body.Size=UDim2.new(1,0,1,-64)
+Body.Position=UDim2.new(0,0,0,64);Body.BackgroundTransparency=1;Body.BorderSizePixel=0
+Body.ScrollBarThickness=3;Body.ScrollBarImageColor3=C.ACC1
+Body.CanvasSize=UDim2.new(0,0,0,0);Body.AutomaticCanvasSize=Enum.AutomaticSize.Y
+Body.ZIndex=11;Body.Parent=Win
+local BList=Instance.new("UIListLayout",Body);BList.Padding=UDim.new(0,8);BList.SortOrder=Enum.SortOrder.LayoutOrder
+local BPad=Instance.new("UIPadding",Body)
+BPad.PaddingLeft=UDim.new(0,12);BPad.PaddingRight=UDim.new(0,12)
+BPad.PaddingTop=UDim.new(0,12);BPad.PaddingBottom=UDim.new(0,12)
+
+local function Section(title,icon,order)
+    local s=Instance.new("Frame");s.Size=UDim2.new(1,0,0,0);s.AutomaticSize=Enum.AutomaticSize.Y
+    s.BackgroundColor3=C.BG2;s.BorderSizePixel=0;s.LayoutOrder=order;s.Parent=Body
+    Corner(s,10);Stroke(s,C.BORDER,1)
+    local sl=Instance.new("UIListLayout",s);sl.Padding=UDim.new(0,6)
+    local sp=Instance.new("UIPadding",s)
+    sp.PaddingLeft=UDim.new(0,10);sp.PaddingRight=UDim.new(0,10)
+    sp.PaddingTop=UDim.new(0,8);sp.PaddingBottom=UDim.new(0,10)
+    Lbl(s,{Text=icon.."  "..title,Size=UDim2.new(1,0,0,18),Font=Enum.Font.GothamBold,
+        TextColor3=C.TXT2,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12,LayoutOrder=0})
+    local div=Instance.new("Frame",s);div.Size=UDim2.new(1,0,0,1)
+    div.BackgroundColor3=C.BORDER;div.BorderSizePixel=0;div.LayoutOrder=1
+    return s
 end
 
--- Status label
-local StatusLbl = MakeLbl(Content, "Describe the opponent avatar below ↓", 22, Color3.fromRGB(120,120,140))
-
--- Description box
-MakeLbl(Content, "👾  Avatar Description", 20, Color3.fromRGB(220,40,40))
-local DescBox = Instance.new("TextBox")
-DescBox.PlaceholderText = "e.g. noob with bacon hair, free shirt, no accessories"
-DescBox.Text = ""
-DescBox.Size = UDim2.new(1, 0, 0, 70)
-DescBox.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-DescBox.TextColor3 = Color3.fromRGB(240, 240, 245)
-DescBox.PlaceholderColor3 = Color3.fromRGB(80, 80, 100)
-DescBox.Font = Enum.Font.Gotham
-DescBox.TextScaled = true
-DescBox.TextWrapped = true
-DescBox.MultiLine = true
-DescBox.BorderSizePixel = 0
-DescBox.ClearTextOnFocus = false
-DescBox.Parent = Content
-Instance.new("UICorner", DescBox).CornerRadius = UDim.new(0, 7)
-local dbs = Instance.new("UIStroke", DescBox)
-dbs.Color = Color3.fromRGB(40,40,55); dbs.Thickness = 1
-DescBox.Focused:Connect(function()    dbs.Color = Color3.fromRGB(220,40,40) end)
-DescBox.FocusLost:Connect(function()  dbs.Color = Color3.fromRGB(40,40,55)  end)
-
--- Number of lines row
-MakeLbl(Content, "📝  Number of Rap Lines", 20, Color3.fromRGB(220,40,40))
-local linesRow = Instance.new("Frame")
-linesRow.Size = UDim2.new(1, 0, 0, 34)
-linesRow.BackgroundTransparency = 1
-linesRow.Parent = Content
-local linesRL = Instance.new("UIListLayout", linesRow)
-linesRL.FillDirection = Enum.FillDirection.Horizontal
-linesRL.Padding = UDim.new(0, 6)
-
-local numLines = 7
-local numOptions = {4, 5, 6, 7, 8, 10, 12}
-local numBtns = {}
-for _, n in ipairs(numOptions) do
-    local nb = Instance.new("TextButton")
-    nb.Text = tostring(n)
-    nb.Size = UDim2.new(0, 40, 1, 0)
-    nb.BackgroundColor3 = n == numLines and Color3.fromRGB(220,40,40) or Color3.fromRGB(30,30,42)
-    nb.TextColor3 = Color3.fromRGB(255,255,255)
-    nb.Font = Enum.Font.GothamBold
-    nb.TextScaled = true
-    nb.BorderSizePixel = 0
-    nb.AutoButtonColor = false
-    nb.Parent = linesRow
-    Instance.new("UICorner", nb).CornerRadius = UDim.new(0, 6)
-    numBtns[n] = nb
-    nb.MouseButton1Click:Connect(function()
-        numLines = n
-        for k, b in pairs(numBtns) do
-            b.BackgroundColor3 = k==n and Color3.fromRGB(220,40,40) or Color3.fromRGB(30,30,42)
-        end
-    end)
+local function InputBox(parent,ph,h,order,multi)
+    local w=Instance.new("Frame");w.Size=UDim2.new(1,0,0,h);w.BackgroundColor3=C.BG0
+    w.BorderSizePixel=0;w.LayoutOrder=order;w.Parent=parent;Corner(w,8)
+    local sk=Stroke(w,C.BORDER,1)
+    local b=Instance.new("TextBox");b.Size=UDim2.new(1,-16,1,-8);b.Position=UDim2.new(0,8,0,4)
+    b.BackgroundTransparency=1;b.TextColor3=C.TXT0;b.PlaceholderColor3=C.TXT2
+    b.PlaceholderText=ph;b.Font=Enum.Font.Gotham;b.TextScaled=true
+    b.TextWrapped=true;b.MultiLine=multi or false;b.ClearTextOnFocus=false
+    b.BorderSizePixel=0;b.ZIndex=13;b.Parent=w
+    b.Focused:Connect(function() Tw(sk,0.15,{Color=C.ACC1,Thickness=1.5});Tw(w,0.15,{BackgroundColor3=C.BG1}) end)
+    b.FocusLost:Connect(function() Tw(sk,0.15,{Color=C.BORDER,Thickness=1});Tw(w,0.15,{BackgroundColor3=C.BG0}) end)
+    return b,w
 end
 
--- Delay row
-MakeLbl(Content, "⏱  Delay Between Lines", 20, Color3.fromRGB(220,40,40))
-local delayRow = Instance.new("Frame")
-delayRow.Size = UDim2.new(1, 0, 0, 34)
-delayRow.BackgroundTransparency = 1
-delayRow.Parent = Content
-local delRL = Instance.new("UIListLayout", delayRow)
-delRL.FillDirection = Enum.FillDirection.Horizontal
-delRL.Padding = UDim.new(0, 6)
-
-local lineDelay = 2
-local delayOptions = {1, 1.5, 2, 2.5, 3}
-local delayBtns = {}
-for _, d in ipairs(delayOptions) do
-    local db = Instance.new("TextButton")
-    db.Text = d.."s"
-    db.Size = UDim2.new(0, 48, 1, 0)
-    db.BackgroundColor3 = d == lineDelay and Color3.fromRGB(220,40,40) or Color3.fromRGB(30,30,42)
-    db.TextColor3 = Color3.fromRGB(255,255,255)
-    db.Font = Enum.Font.GothamBold
-    db.TextScaled = true
-    db.BorderSizePixel = 0
-    db.AutoButtonColor = false
-    db.Parent = delayRow
-    Instance.new("UICorner", db).CornerRadius = UDim.new(0, 6)
-    delayBtns[d] = db
-    db.MouseButton1Click:Connect(function()
-        lineDelay = d
-        for k, b in pairs(delayBtns) do
-            b.BackgroundColor3 = k==d and Color3.fromRGB(220,40,40) or Color3.fromRGB(30,30,42)
-        end
-    end)
+local function ChipRow(parent,opts,default,order)
+    local row=Instance.new("Frame");row.Size=UDim2.new(1,0,0,32)
+    row.BackgroundTransparency=1;row.LayoutOrder=order;row.Parent=parent
+    local rl=Instance.new("UIListLayout",row);rl.FillDirection=Enum.FillDirection.Horizontal;rl.Padding=UDim.new(0,5)
+    local sel=default;local btns={}
+    for _,v in ipairs(opts) do
+        local b=Instance.new("TextButton");b.Size=UDim2.new(0,0,1,0);b.AutomaticSize=Enum.AutomaticSize.X
+        b.BackgroundColor3=v==default and C.ACC1 or C.BG3;b.TextColor3=C.TXT0
+        b.Text="  "..tostring(v).."  ";b.Font=Enum.Font.GothamBold;b.TextScaled=true
+        b.BorderSizePixel=0;b.AutoButtonColor=false;b.ZIndex=13;b.Parent=row;Corner(b,7);btns[v]=b
+        b.MouseButton1Click:Connect(function()
+            sel=v
+            for k,btn in pairs(btns) do Tw(btn,0.1,{BackgroundColor3=k==v and C.ACC1 or C.BG3}) end
+        end)
+    end
+    return row,function() return sel end
 end
 
--- Generate + Rap button
-local GenBtn = Instance.new("TextButton")
-GenBtn.Text = "🤖  GENERATE & RAP"
-GenBtn.Size = UDim2.new(1, 0, 0, 42)
-GenBtn.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
-GenBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-GenBtn.Font = Enum.Font.GothamBold
-GenBtn.TextScaled = true
-GenBtn.BorderSizePixel = 0
-GenBtn.AutoButtonColor = false
-GenBtn.Parent = Content
-Instance.new("UICorner", GenBtn).CornerRadius = UDim.new(0, 8)
+-- Section 1: API Key
+local S1=Section("OpenAI API Key","🔑",1)
+local ApiBox,ApiWrap=InputBox(S1,"sk-proj-...",38,2)
+ApiBox.TextTransparency=0.6
+local keyRow=Instance.new("Frame");keyRow.Size=UDim2.new(1,0,0,24)
+keyRow.BackgroundTransparency=1;keyRow.LayoutOrder=3;keyRow.Parent=S1
+local krl=Instance.new("UIListLayout",keyRow);krl.FillDirection=Enum.FillDirection.Horizontal
+krl.VerticalAlignment=Enum.VerticalAlignment.Center;krl.Padding=UDim.new(0,6)
+Lbl(keyRow,{Text="platform.openai.com/api-keys",Size=UDim2.new(1,-80,1,0),
+    Font=Enum.Font.Gotham,TextColor3=C.TXT2,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=13})
+local TogBtn=Instance.new("TextButton");TogBtn.Size=UDim2.new(0,74,1,0)
+TogBtn.BackgroundColor3=C.BG3;TogBtn.TextColor3=C.TXT1;TogBtn.Text="👁 Show"
+TogBtn.Font=Enum.Font.GothamBold;TogBtn.TextScaled=true;TogBtn.BorderSizePixel=0
+TogBtn.AutoButtonColor=false;TogBtn.ZIndex=13;TogBtn.Parent=keyRow;Corner(TogBtn,6)
+local showVis=false
+TogBtn.MouseButton1Click:Connect(function()
+    showVis=not showVis;ApiBox.TextTransparency=showVis and 0 or 0.6
+    TogBtn.Text=showVis and "🙈 Hide" or "👁 Show"
+end)
 
-local rapping = false
+-- Section 2: Description
+local S2=Section("Avatar Description","👾",2)
+local DescBox,_=InputBox(S2,"e.g. noob with bacon hair, free shirt, no accessories",68,2,true)
+local charLbl=Lbl(S2,{Text="0 / 200",Size=UDim2.new(1,0,0,14),Font=Enum.Font.Gotham,
+    TextColor3=C.TXT2,TextXAlignment=Enum.TextXAlignment.Right,ZIndex=13,LayoutOrder=3})
+DescBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local n=math.min(#DescBox.Text,200);charLbl.Text=n.." / 200"
+    charLbl.TextColor3=n>180 and C.YELLOW or C.TXT2
+    if #DescBox.Text>200 then DescBox.Text=DescBox.Text:sub(1,200) end
+end)
+
+-- Section 3: Settings
+local S3=Section("Battle Settings","⚙",3)
+Lbl(S3,{Text="Lines per verse",Size=UDim2.new(1,0,0,16),Font=Enum.Font.GothamBold,
+    TextColor3=C.TXT1,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=13,LayoutOrder=2})
+local _,getLinesVal=ChipRow(S3,{4,5,6,7,8,10,12},7,3)
+Lbl(S3,{Text="Delay between lines",Size=UDim2.new(1,0,0,16),Font=Enum.Font.GothamBold,
+    TextColor3=C.TXT1,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=13,LayoutOrder=4})
+local _,getDelayVal=ChipRow(S3,{1,1.5,2,2.5,3},2,5)
+
+-- Status bar
+local StatusWrap=Instance.new("Frame");StatusWrap.Size=UDim2.new(1,0,0,34)
+StatusWrap.BackgroundColor3=C.BG2;StatusWrap.BorderSizePixel=0;StatusWrap.LayoutOrder=4;StatusWrap.Parent=Body
+Corner(StatusWrap,8);Stroke(StatusWrap,C.BORDER,1)
+local StatusLbl=Lbl(StatusWrap,{Text="Enter your API key and describe the opponent",
+    Size=UDim2.new(1,-14,1,0),Position=UDim2.new(0,7,0,0),Font=Enum.Font.Gotham,
+    TextColor3=C.TXT2,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=13})
+
+-- Progress bar
+local ProgTrack=Instance.new("Frame");ProgTrack.Size=UDim2.new(1,0,0,5)
+ProgTrack.BackgroundColor3=C.BORDER;ProgTrack.BorderSizePixel=0
+ProgTrack.LayoutOrder=5;ProgTrack.Visible=false;ProgTrack.Parent=Body;Corner(ProgTrack,3)
+local ProgFill=Instance.new("Frame");ProgFill.Size=UDim2.new(0,0,1,0)
+ProgFill.BackgroundColor3=C.ACC1;ProgFill.BorderSizePixel=0;ProgFill.Parent=ProgTrack
+Corner(ProgFill,3);Grad(ProgFill,C.ACC3,C.ACC2,0)
+
+-- Generate button
+local GenBtn=Instance.new("TextButton");GenBtn.Size=UDim2.new(1,0,0,48)
+GenBtn.BackgroundColor3=C.ACC1;GenBtn.TextColor3=C.TXT0;GenBtn.Text="⚡   GENERATE & RAP"
+GenBtn.Font=Enum.Font.GothamBold;GenBtn.TextScaled=true;GenBtn.BorderSizePixel=0
+GenBtn.AutoButtonColor=false;GenBtn.LayoutOrder=6;GenBtn.ZIndex=13;GenBtn.Parent=Body
+Corner(GenBtn,11);Grad(GenBtn,C.ACC3,C.ACC2,45)
+
+local rapping=false
+local function setStatus(txt,col,icon)
+    StatusLbl.Text=(icon and icon.."  " or "")..txt;StatusLbl.TextColor3=col or C.TXT2
+end
 
 GenBtn.MouseButton1Click:Connect(function()
     if rapping then return end
-
-    local desc = DescBox.Text
-    if not desc or #desc < 3 then
-        StatusLbl.Text = "⚠ Enter an avatar description first!"
-        StatusLbl.TextColor3 = Color3.fromRGB(255, 200, 50)
-        return
+    local key,desc=ApiBox.Text,DescBox.Text
+    if not key or #key<20 then
+        setStatus("Paste a valid OpenAI API key first!",C.YELLOW,"⚠")
+        Tw(ApiWrap,0.08,{BackgroundColor3=Color3.fromRGB(60,30,10)})
+        task.delay(0.5,function() Tw(ApiWrap,0.3,{BackgroundColor3=C.BG0}) end);return
     end
-
-    rapping = true
-    GenBtn.Text = "⏳  Generating..."
-    GenBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-    StatusLbl.Text = "🤖 AI is writing your rap..."
-    StatusLbl.TextColor3 = Color3.fromRGB(100, 180, 255)
-
-    GenerateRap(desc, numLines, function(lines, err)
+    if not desc or #desc<3 then setStatus("Describe the opponent first!",C.YELLOW,"⚠");return end
+    rapping=true;GenBtn.Text="⏳   Generating..."
+    Tw(GenBtn,0.1,{BackgroundColor3=C.BG3});ProgTrack.Visible=true
+    Tw(ProgFill,0.8,{Size=UDim2.new(0.25,0,1,0)});setStatus("AI is writing your bars...",C.ACC2,"🤖")
+    GenerateRap(key,desc,getLinesVal(),function(lines,err)
         if err or not lines then
-            StatusLbl.Text = "❌ " .. (err or "Unknown error")
-            StatusLbl.TextColor3 = Color3.fromRGB(255, 80, 80)
-            GenBtn.Text = "🤖  GENERATE & RAP"
-            GenBtn.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
-            rapping = false
-            return
+            setStatus(err or "Unknown error",C.RED,"❌");GenBtn.Text="⚡   GENERATE & RAP"
+            Tw(GenBtn,0.1,{BackgroundColor3=C.ACC1});ProgTrack.Visible=false
+            ProgFill.Size=UDim2.new(0,0,1,0);rapping=false;return
         end
-
-        StatusLbl.Text = "🎤 Rapping " .. #lines .. " lines..."
-        StatusLbl.TextColor3 = Color3.fromRGB(30, 200, 80)
-        GenBtn.Text = "🎤 Rapping..."
-
+        Tw(ProgFill,0.3,{Size=UDim2.new(0.5,0,1,0)});GenBtn.Text="🎤   Spitting bars..."
+        setStatus("Rapping "..#lines.." lines...",C.GREEN,"🎤")
         task.spawn(function()
-            for i, line in ipairs(lines) do
+            for i,line in ipairs(lines) do
                 Say(line)
-                StatusLbl.Text = "🎤 Line " .. i .. "/" .. #lines .. ": " .. line:sub(1,30) .. "..."
-                task.wait(lineDelay)
+                Tw(ProgFill,getDelayVal()*0.85,{Size=UDim2.new(0.5+(i/#lines)*0.5,0,1,0)})
+                setStatus("Line "..i.."/"..#lines.."  · "..(#line>34 and line:sub(1,34).."…" or line),C.GREEN,"🎤")
+                task.wait(getDelayVal())
             end
-            StatusLbl.Text = "✅ Done! Generate another rap below."
-            StatusLbl.TextColor3 = Color3.fromRGB(30, 200, 80)
-            GenBtn.Text = "🤖  GENERATE & RAP"
-            GenBtn.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
-            rapping = false
+            Tw(ProgFill,0.4,{Size=UDim2.new(1,0,1,0)});task.wait(0.5)
+            setStatus("Done! Drop another rap anytime.",C.GREEN,"✅")
+            Tw(ProgFill,0.6,{Size=UDim2.new(0,0,1,0)})
+            task.delay(0.7,function() ProgTrack.Visible=false end)
+            GenBtn.Text="⚡   GENERATE & RAP";Tw(GenBtn,0.1,{BackgroundColor3=C.ACC1});rapping=false
         end)
     end)
 end)
 
--- ─────────────────────────────────────
---  DRAGGING
--- ─────────────────────────────────────
-local dragging, dragInput, dragStart, startPos
-TBar.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true; dragStart = i.Position; startPos = Win.Position
-        i.Changed:Connect(function()
-            if i.UserInputState == Enum.UserInputState.End then dragging = false end
-        end)
+-- Dragging
+local dragging,dragInput,dragStart,startPos
+Header.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then
+        dragging=true;dragStart=i.Position;startPos=Win.Position
+        i.Changed:Connect(function() if i.UserInputState==Enum.UserInputState.End then dragging=false end end)
     end
 end)
-TBar.InputChanged:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseMovement then dragInput = i end
-end)
+Header.InputChanged:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseMovement then dragInput=i end end)
 UserInputService.InputChanged:Connect(function(i)
-    if i == dragInput and dragging then
-        local d = i.Position - dragStart
-        Win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
-                                  startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    if i==dragInput and dragging then
+        local d=i.Position-dragStart
+        Win.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
     end
 end)
 
 -- Open animation
-Win.Size = UDim2.new(0, 380, 0, 0)
-Win.BackgroundTransparency = 1
-TweenService:Create(Win, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-    Size = UDim2.new(0, 380, 0, 420),
-    BackgroundTransparency = 0
-}):Play()
+Win.Size=UDim2.new(0,WIN_W,0,0);Win.BackgroundTransparency=1
+TweenService:Create(Win,TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+    {Size=UDim2.new(0,WIN_W,0,WIN_H),BackgroundTransparency=0}):Play()
 
-print("[AI Rap Generator] Loaded!")
+task.spawn(function()
+    while SGui and SGui.Parent do
+        Tw(TopLine,1.8,{BackgroundTransparency=0.3});task.wait(1.8)
+        Tw(TopLine,1.8,{BackgroundTransparency=0});task.wait(1.8)
+    end
+end)
+
+print("[FlowForge v2] Loaded 🔥")
